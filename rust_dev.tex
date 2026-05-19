@@ -1,0 +1,205 @@
+\documentclass[a4paper,11pt]{article}
+
+% Package imports
+\usepackage{latexsym}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{ragged2e}
+\usepackage[empty]{fullpage}
+\usepackage{wrapfig}
+\usepackage{lipsum}
+\usepackage{tabularx}
+\usepackage{titlesec}
+\usepackage{geometry}
+\usepackage{marvosym}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{multicol}
+\usepackage{graphicx}
+\usepackage{cfr-lm}
+\usepackage[T1]{fontenc}
+\usepackage{fontawesome5}
+
+% Color definitions
+\definecolor{darkblue}{RGB}{0,0,139}
+
+% Page layout
+\setlength{\multicolsep}{0pt} 
+\pagestyle{fancy}
+\fancyhf{} % clear all header and footer fields
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\geometry{left=1.2cm, top=0.4cm, right=1.0cm, bottom=0.5cm}
+\setlength{\footskip}{5pt} % Addressing fancyhdr warning
+
+% Hyperlink setup (moved after fancyhdr to address warning)
+\usepackage[hidelinks]{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=darkblue,
+    filecolor=darkblue,
+    urlcolor=darkblue,
+}
+
+% Custom box settings
+\usepackage[most]{tcolorbox}
+\tcbset{
+    frame code={},
+    center title,
+    left=0pt,
+    right=0pt,
+    top=0pt,
+    bottom=0pt,
+    colback=gray!20,
+    colframe=white,
+    width=\dimexpr\textwidth\relax,
+    enlarge left by=-2mm,
+    boxsep=4pt,
+    arc=0pt,outer arc=0pt,
+}
+
+% URL style
+\urlstyle{same}
+
+% Text alignment
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Section formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-7pt}]
+
+% Custom commands
+\newcommand{\resumeItem}[2]{
+  \item{
+    \textbf{#1}{\hspace{0.5mm}#2 \vspace{-0.5mm}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+\vspace{0.5mm}\item
+    \begin{tabular*}{0.98\textwidth}[t]{l@{\extracolsep{\fill}}r}
+        \textbf{#1} & \textit{\footnotesize{#4}} \\
+        \textit{\footnotesize{#3}} &  \footnotesize{#2}\\
+    \end{tabular*}
+    \vspace{-2.4mm}
+}
+
+\newcommand{\resumeItemListStart}{\begin{itemize}[leftmargin=*,labelsep=1mm,itemsep=0.5mm]}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-2mm}}
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=*,labelsep=1mm]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}\vspace{0.5mm}}
+
+\begin{document}
+
+% Header
+\begin{center}
+    {\Huge\textbf{Amit Kumar Yadav}} \\
+    \vspace{1mm}
+    \small{\textbf{Backend Engineer} $|$ Go, Rust, Blockchain \& Distributed Systems $|$ (+91) 7017885121 $|$ \href{mailto:amitkumaryadav191@gmail.com}{amitkumaryadav191@gmail.com} $|$ \href{https://amit22-yadav.github.io/Amit-yadav-portfolio/}{Portfolio} $|$ \href{https://www.linkedin.com/in/amit-kumar-yadav-44260419b/}{LinkedIn} $|$ \href{https://github.com/Amit22-yadav}{Github} $|$ \href{https://substrate.stackexchange.com/users/2281/amit-kumar-yadav}{StackExchange}}
+\end{center}
+\vspace{-7mm}
+
+\section*{Summary}
+
+\small{
+Backend engineer with 4+ years of production experience in Go, Rust, blockchain protocol engineering, and distributed systems. Shipped consensus-level work on a PolyBFT EVM L1 (Hydragon) in Go — slashing module, EVM hard-fork upgrade, and IBFT quorum fixes. Authored a Substrate/FRAME pallet in Rust, integrated Frontier (EVM) into two Substrate chains, and delivered 5 production Sui Move contracts. Currently building a Rust order-matching engine sustaining 728K orders/sec.
+}
+
+\section*{Professional Experience: Antier Solutions (February 2022- Present)}
+
+\vspace{-0.4mm}
+  \resumeSubHeadingListStart
+
+  \resumeSubheading
+      {Order Matching Engine (Centralized Exchange)}{Mohali, India}
+      {Rust Backend Engineer}{March 2026 - Present}
+      \resumeItemListStart
+        \resumeItem{Engine Core: }{High-throughput Rust matching engine supporting limit and market orders with a price-time priority order book; sustaining 728K orders/sec and peaking above 1M orders/sec under burst load on commodity hardware.}\newline
+        \textbf{Tech}: Rust, Tokio, async/await, criterion benchmarks.
+      \resumeItemListEnd
+
+
+  \resumeSubheading
+      {Hydra Chain (Hydragon Node)}{Mohali, India}
+      {Protocol Engineer}{February 2025 - December 2025}
+      \resumeItemListStart
+        \resumeItem{Consensus Engineering: }{Built a validator slashing module for PolyBFT with double-sign detection and on-chain slashing-contract submission across 5 merged PRs; also fixed a quorum-calculation bug in HasQuorum that caused 100\% block stalls for validator sets under 4 nodes.}
+        \resumeItem{EVM Hard-Fork Upgrade: }{Upgraded Hydragon EVM across 2 hard forks (London $\rightarrow$ Paris $\rightarrow$ Shanghai) by implementing 4 EIPs (4399, 3855, 3860, 3651), and contributed to the on-chain Solidity slashing contracts wired to consensus-layer system transactions.}
+        \resumeItem{P2P / Networking: }{Reworked peer persistence and multi-source bootnode discovery across 3 PRs, eliminating stale-peer reconnect storms after restart and reducing post-restart reconnect latency.}\newline
+        \textbf{Tech}: Go, EVM internals, PolyBFT, Geth, libp2p, Solidity. \textbf{Links}: \href{https://github.com/Hydra-Chain/hydragon-node/pull/122}{Slashing PR}, \href{https://github.com/Hydra-Chain/hydragon-node/pull/123}{EVM Upgrade PR}, \href{https://github.com/Hydra-Chain/hydragon-node/pulls?q=is\%3Apr+author\%3As-h-ubham+is\%3Aclosed}{Merged PRs}.
+      \resumeItemListEnd
+
+
+  \resumeSubheading
+      {HYDRO}{Mohali, India}
+      {Smart Contract Developer (Sui Move)}{February 2024 - January 2025}
+      \resumeItemListStart
+        \resumeItem{Smart Contracts: }{Designed and shipped 5 production Sui Move contracts to mainnet — Token, Migration, Vesting, Staking, and Rewards Distribution — forming the on-chain backbone of the HYDRO token economy over 12 months.}\newline
+        \textbf{Tech}: Sui Move, Sui CLI, Bitbucket. \textbf{Links}: \href{https://suiscan.xyz/mainnet/object/0x4bb07b086c13bda7af26b9872fa8c4b460a9c0479cde6a63de4b9d29ea0ec99a/contracts}{Token}, \href{https://suiscan.xyz/mainnet/object/0xbfa32851690179e9576df04d932108040ca585f5c9ee487908b5ae92466367a8/contracts}{Migration}, \href{https://suiscan.xyz/mainnet/object/0xcee7a9493802ad54cd28411c69158cb21d7fb945b39d608a1cf989670d8ed4b0/contracts}{Vesting}, \href{https://suiscan.xyz/mainnet/object/0x123fc385b4d17d0cfe9d9f561dd475b163db6f91fbb7481af5019fe3032baa6c/contracts}{Staking}, \href{https://suiscan.xyz/mainnet/object/0x9ab7bdf99a40beb91835b6d948d13ffef96b1c10cc2b026b03512fdad3b46ebc/contracts}{Rewards}.
+      \resumeItemListEnd
+
+
+  \resumeSubheading
+      {5ireChain}{Mohali, India}
+      {Core Blockchain Developer}{December 2022 - July 2023}
+      \resumeItemListStart
+        \resumeItem{EVM Integration: }{Integrated \href{https://github.com/paritytech/frontier}{Frontier (EVM)} into \href{https://github.com/5ire-tech/5ireChain}{5ireChain} over 8 months, delivering an EVM + WASM dual-VM L1 supporting 100\% Ethereum-tooling compatibility.}
+        \resumeItem{ESG Pallet: }{Authored the \href{https://github.com/5ire-tech/5ireChain/tree/master/frame/esg}{ESG pallet} in Substrate/FRAME — a validator-scoring module that adjusts block rewards based on Sustainability Score; validated end-to-end on a local multi-validator testnet. (\href{https://explorer.5ire.network}{Explorer})}
+      \resumeItemListEnd
+
+
+  \resumeSubheading
+      {Earlier Roles at Antier Solutions}{Mohali, India}
+      {Blockchain Developer}{June 2022 - January 2024}
+      \resumeItemListStart
+        \resumeItem{CTRL ALT (Nov 2023 - Jan 2024): }{Designed and shipped an Algorand on-chain voting contract using PyTeal + Beaker over a 3-month engagement, containerized via Docker for reproducible deployments.}
+        \resumeItem{SaitaChain (Aug 2023 - Oct 2023): }{Implemented NPOS consensus pallets and Frontier (EVM) compatibility on a Substrate-based EVM and WASM L1 within a 3-month delivery window.}
+        \resumeItem{Peer / VINE Chain (Jun 2022 - Dec 2022): }{Bootstrapped a Substrate L1 from scratch over 6 months — chain spec, genesis config, NPOS validator set, and forkless runtime upgrades. (\href{https://vne.network}{Network}, \href{https://validator.vne.network}{Validator}, \href{https://nominator.vne.network}{Nominator})}
+      \resumeItemListEnd
+
+
+  \resumeSubHeadingListEnd
+
+% \section*{Skills}
+% \vspace{-0.4mm}
+% \resumeSubHeadingListStart
+\section{Technologies}
+
+\small{
+\textbf{Languages:} Rust, Go, Solidity, Sui Move, Python, PyTeal, C++, SQL. \\
+\textbf{Blockchain:} Substrate, FRAME, Frontier (EVM), PolyBFT, EVM internals (EIPs, opcodes, gas metering), Sui, Algorand, Cosmos SDK, Beaker, libp2p. \\
+\textbf{Smart Contracts:} ERC-20, Staking, Vesting, Governance / Voting, Token Migration, Rewards Distribution, Slashing. \\
+\textbf{Backend / Systems:} Tokio, async Rust, criterion benchmarking, REST APIs, Docker. \\
+\textbf{Cloud \& Databases:} AWS (Lambda, AppSync, S3, SNS), PostgreSQL, DynamoDB. \\
+\textbf{Developer Tools:} Git, GitHub, GitLab, Bitbucket, Jira, VS Code. \\
+\textbf{Operating Systems:} Linux, macOS, Windows.
+}
+
+\section{Education}
+\vspace{-0.4mm}
+\resumeSubHeadingListStart
+\item {Babu Banarasi Das University, Lucknow, UP.} { Master’s of Computer Applications (MCA) (CGPA: 8.2/10)}.\newline {June 2018 -- June 2020}
+\item {HNB Garhwal University, Srinagar, UK.} {Bachelor's of Computer Applications(BCA) (CGPA: 6.5/10 )}.\newline {June 2015 -- June 2018}
+\resumeSubHeadingListEnd
+
+
+
+% \section*{Languages}
+% \vspace{-0.4mm}
+% \resumeSubHeadingListStart
+% \resumeItem{English, Hindi, Punjabi}{}
+% \resumeSubHeadingListEnd
+
+% \section*{Hobbies}
+% \vspace{-0.4mm}
+% \resumeSubHeadingListStart
+% \resumeItem{Trekking, Traveling, Dancing, Shopping}{}
+% \resumeSubHeadingListEnd
+
+
+        
+\end{document}
