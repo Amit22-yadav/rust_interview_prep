@@ -337,9 +337,1043 @@ Yeh document ek **realistic mock interview** hai — exactly waise jaise Persist
 
 ---
 
+## Q12. "Smart pointers — Box, Rc, Arc, RefCell, Cell — when do you use each?"
+
+### Best Answer
+
+> Rust mein smart pointers heap allocation aur ownership semantics customize karte hain. Main har ek ka use case explain karta hoon:
+>
+> **`Box<T>`** — single ownership, heap allocation. Use karo jab:
+> - **Type ka size compile-time pe pata nahi** — like recursive types: `struct Node { next: Option<Box<Node>> }`. Box ke bina yeh infinite-sized type ho jaata.
+> - **Large value ko stack se heap par move karna** — performance ya stack-overflow avoid karne ke liye.
+> - **Trait object banana** — `Box<dyn Trait>` for dynamic dispatch when you need heterogeneous collections.
+>
+> Zero runtime overhead — Box ek pointer hai, dereference free hai. Drop par memory automatically free hoti hai.
+>
+> **`Rc<T>`** (Reference Counted) — single-threaded shared ownership. Use karo jab:
+> - **Multiple parts of code ko same data own karna hai**, lekin tum single-threaded ho.
+> - **Graph data structures** — like trees with shared children, DAGs.
+>
+> Limitation: **`Rc` is `!Send` aur `!Sync`** — multi-threaded use nahi hota kyunki reference count atomic nahi hai.
+>
+> ```rust
+> use std::rc::Rc;
+> let shared = Rc::new(vec![1, 2, 3]);
+> let a = Rc::clone(&shared);  // count = 2
+> let b = Rc::clone(&shared);  // count = 3
+> // sab drop hone par memory free
+> ```
+>
+> **`Arc<T>`** (Atomically Reference Counted) — multi-threaded shared ownership. Same as Rc but with atomic refcount.
+> - Use karo **across threads** — `Arc<Mutex<T>>` ya `Arc<RwLock<T>>` standard pattern hai shared mutable state ke liye.
+> - **Slightly slower** than Rc due to atomic ops, but still very cheap (~1-2 ns per clone).
+> - Yahi reason hai ki Rc aur Arc dono exist karte hain — single-threaded code pay nahi karta multi-threading ka tax.
+>
+> **`RefCell<T>`** — interior mutability, runtime-checked. Use karo jab:
+> - **Compile-time borrow checker** se aap workaround nahi kar sakte — like a shared graph where occasional mutation is needed.
+> - **Mock objects in tests** — tests mein state mutate karne ka clean way.
+>
+> Catch: **Borrow rules runtime par check hote hain** — agar aap `RefCell::borrow_mut()` call karte ho jab already mutable borrow active hai, **panic** hota hai. Yeh `!Sync` hai.
+>
+> ```rust
+> use std::cell::RefCell;
+> let cell = RefCell::new(5);
+> *cell.borrow_mut() = 10;  // OK
+> // Multiple immutable borrows OK
+> let a = cell.borrow();
+> let b = cell.borrow();
+> // But borrow_mut() now would panic at runtime
+> ```
+>
+> **`Cell<T>`** — interior mutability for `Copy` types only. No borrow checking — `get()` and `set()` directly. Faster than RefCell because no runtime check. Use for simple `Copy` types like `Cell<u32>` ya `Cell<bool>`.
+>
+> **Common combinations** (yeh patterns yaad rakhne hain):
+> - `Rc<RefCell<T>>` — single-threaded shared mutable state. Linked lists, graphs.
+> - `Arc<Mutex<T>>` — multi-threaded shared mutable state. Standard concurrent pattern.
+> - `Arc<RwLock<T>>` — multi-threaded shared mutable state, read-heavy workload.
+> - `Arc<T>` (no lock) — shared immutable state across threads. Configuration, constants.
+>
+> **Real example from matching engine**: Maine `Arc<DashMap<Symbol, OrderBook>>` use kiya — DashMap is sharded RwLock under the hood, allowing concurrent reads on different symbols without lock contention.
+
+---
+
+## Q13. "Error handling in Rust — Result, ?, thiserror vs anyhow?"
+
+### Best Answer
+
+> Rust mein error handling **Result<T, E>** type ke around build hai — no exceptions. Yeh deliberate design choice hai jo error path explicit banata hai.
+>
+> **`Result<T, E>`** ek enum hai with two variants: `Ok(T)` ya `Err(E)`. Compiler force karta hai aap handle karo — `match`, `if let`, `?` operator, ya `.unwrap()`/`.expect()`.
+>
+> **`?` operator** — sabse important ergonomic feature. Yeh kya karta hai:
+>
+> ```rust
+> fn read_config() -> Result<Config, MyError> {
+>     let raw = std::fs::read_to_string("config.toml")?;  // io::Error -> MyError
+>     let parsed: Config = toml::from_str(&raw)?;          // toml::Error -> MyError
+>     Ok(parsed)
+> }
+> ```
+>
+> `?` ka desugar:
+> ```rust
+> let raw = match std::fs::read_to_string("config.toml") {
+>     Ok(v) => v,
+>     Err(e) => return Err(e.into()),  // From trait conversion
+> };
+> ```
+>
+> Key point: **`?` automatically calls `From::from()`** to convert the error type — yahi se ergonomic error propagation milta hai jab aapka custom error type implement karta hai `From<io::Error>`, `From<toml::Error>`, etc.
+>
+> **`thiserror` vs `anyhow`** — yeh standard split hai Rust ecosystem mein:
+>
+> **`thiserror`** — **libraries ke liye**. Custom error type define karte ho with structured variants:
+>
+> ```rust
+> use thiserror::Error;
+>
+> #[derive(Debug, Error)]
+> pub enum MatchingError {
+>     #[error("invalid order: {0}")]
+>     InvalidOrder(String),
+>     #[error("database error")]
+>     Database(#[from] sqlx::Error),
+>     #[error("insufficient liquidity for {symbol}")]
+>     InsufficientLiquidity { symbol: String },
+> }
+> ```
+>
+> Yeh **structured errors** deta hai jisse callers programmatically handle kar sakte hain — match on variant, take action.
+>
+> **`anyhow`** — **applications ke liye**. Generic `anyhow::Error` jo any error wrap kar sakta hai. Tradeoff: ease of use vs precision. Use case:
+>
+> ```rust
+> use anyhow::{Context, Result};
+>
+> fn run() -> Result<()> {
+>     let config = load_config()
+>         .context("failed to load config file")?;
+>     start_server(&config)
+>         .context("server startup failed")?;
+>     Ok(())
+> }
+> ```
+>
+> `.context()` adds **error context** — when error bubbles up, full chain dikhta hai: *"server startup failed → failed to bind port 3000 → permission denied"*. Yeh debugging ke liye gold hai.
+>
+> **My pattern in practice**:
+> - **Libraries / domain code** — `thiserror` with structured error enums.
+> - **Application top-level** (main, request handlers) — `anyhow::Result` with `.context()` everywhere.
+> - **Never `.unwrap()` in production code** — except for invariants that are truly impossible (like `mutex.lock().unwrap()` where poisoning is fatal anyway).
+>
+> **Common interview pitfall**: people don't know about `?` chaining or how `From` enables it. Mention both explicitly.
+
+---
+
+## Q14. "Traits — `impl Trait` vs `dyn Trait`, trait objects, generic bounds?"
+
+### Best Answer
+
+> Traits Rust ke type system ka heart hain — like interfaces, but more powerful kyunki they support default methods, associated types, and zero-cost generic dispatch.
+>
+> **Trait definition**:
+> ```rust
+> trait OrderProcessor {
+>     fn process(&self, order: &Order) -> Result<Trade, Error>;
+>     fn name(&self) -> &str { "default" }  // default method
+> }
+> ```
+>
+> **Static dispatch — `impl Trait`** (monomorphization):
+>
+> ```rust
+> fn process_all(processor: impl OrderProcessor, orders: &[Order]) {
+>     for o in orders { processor.process(o); }
+> }
+> ```
+>
+> Compiler **monomorphizes** — har concrete type ke liye separate function generate karta hai. Result:
+> - **Zero runtime cost** — calls inline ho sakte hain.
+> - **Larger binary** — code duplication.
+> - **No heterogeneous collections** — `Vec<impl OrderProcessor>` of different types nahi banta.
+>
+> **Dynamic dispatch — `dyn Trait`** (trait objects, vtable):
+>
+> ```rust
+> fn process_all(processor: &dyn OrderProcessor, orders: &[Order]) {
+>     for o in orders { processor.process(o); }
+> }
+>
+> // Heterogeneous collection:
+> let processors: Vec<Box<dyn OrderProcessor>> = vec![
+>     Box::new(LimitProcessor::new()),
+>     Box::new(MarketProcessor::new()),
+> ];
+> ```
+>
+> Yeh **vtable** through call karta hai — ek pointer pointer-to-data + pointer-to-vtable. Runtime indirection cost (~1-2 ns), but flexibility milti hai.
+>
+> **When to use which**:
+> - **`impl Trait`** — same call site only one type, perf-critical, monomorphization fine.
+> - **`dyn Trait`** — heterogeneous collections, plugin systems, reducing compile time / binary size.
+>
+> **Generic bounds** — multiple traits combine karna:
+>
+> ```rust
+> fn save<T: Serialize + Send + 'static>(value: T) { ... }
+>
+> // Or with where clause (cleaner for many bounds):
+> fn save<T>(value: T)
+> where
+>     T: Serialize + Send + 'static,
+> { ... }
+> ```
+>
+> **Common interview traits jo aapko pata hone chahiye**:
+> - **`Clone`** — deep copy. `#[derive(Clone)]` auto-generates.
+> - **`Copy`** — bitwise copy. Implies Clone. Only for small types like `i32`, `f64`.
+> - **`Debug`** / **`Display`** — for `{:?}` and `{}` formatting.
+> - **`From`** / **`Into`** — conversions. Implement `From<X> for Y`, get `Into<Y> for X` free.
+> - **`Iterator`** — sequence abstraction. Implement `next()`, get `map`, `filter`, `collect` free.
+> - **`Send`** / **`Sync`** — concurrency marker traits.
+> - **`Drop`** — destructor — RAII cleanup like file close, lock release.
+>
+> **Senior-level insight**: Most idiomatic Rust APIs accept `impl AsRef<str>` ya `impl Into<String>` rather than concrete types — yeh callers ko flexibility deta hai pass karne mein `&str`, `String`, ya `Cow<str>` without explicit conversion.
+
+---
+
+## Q15. "Lifetimes — what are they, when do you need to annotate them?"
+
+### Best Answer
+
+> **Lifetime** ek **compile-time annotation** hai jo describe karta hai ki ek reference kab tak valid hai. Yeh runtime construct nahi hai — lifetimes existence only in the type system; binary mein koi trace nahi hota.
+>
+> Core rule: **Har reference ki ek lifetime hoti hai** — explicit ya implicit (compiler infer karta hai).
+>
+> Borrow checker yeh ensure karta hai ki **kabhi bhi dangling reference na ho** — yaani aap ek reference use nahi kar sakte after the data it points to has been dropped.
+>
+> **Lifetime elision** — most cases mein aap explicit nahi likhte. Compiler ke teen elision rules hain:
+> 1. Har input reference ko apna lifetime parameter milta hai.
+> 2. Agar exactly one input lifetime hai, output reference ko wahi mil jaata hai.
+> 3. Agar `&self` ya `&mut self` hai, output ko `self` ka lifetime mil jaata hai.
+>
+> **Jab explicit annotation chahiye**:
+>
+> ```rust
+> fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+>     if x.len() > y.len() { x } else { y }
+> }
+> ```
+>
+> Yahaan compiler nahi keh sakta ki output input `x` ka hai ya `y` ka — toh hum bolte hain "output ka lifetime is at least as short as both inputs."
+>
+> **Structs with references**:
+>
+> ```rust
+> struct Parser<'a> {
+>     input: &'a str,
+>     position: usize,
+> }
+> ```
+>
+> Yahaan `Parser` apne data ka owner nahi hai — woh borrow kar raha hai `input` ko. Lifetime ensure karta hai ki `Parser` jab tak exist karta hai, original string bhi exist kare.
+>
+> **Special lifetime `'static`** — entire program duration ke liye valid. String literals ka type `&'static str` hota hai. **Heap-allocated `String`** is NOT `'static` (unless leaked) — woh jab drop hota hai, memory free hoti hai.
+>
+> **Common interview trap**: "Why can't I return `&str` from a function that creates a `String` inside it?"
+>
+> ```rust
+> fn bad() -> &str {  // ERROR
+>     let s = String::from("hello");
+>     &s  // s gets dropped, reference would dangle
+> }
+> ```
+>
+> Fix: return `String` (owned), ya accept the `String` as parameter (caller owns it).
+>
+> **Lifetimes & async** — async function ke andar references hold karna across `.await` complicated hota hai kyunki future ko `'static` hona padhta hai usually (for `tokio::spawn`). Solution: own the data (`String` not `&str`) inside async tasks, ya `Arc` use karo for sharing.
+
+---
+
+## Q16. "Iterators in Rust — why are they zero-cost?"
+
+### Best Answer
+
+> Iterators Rust ke **most powerful abstractions** mein se ek hain — functional-style code (map, filter, fold) write karte ho lekin C-level performance milti hai.
+>
+> **The `Iterator` trait** simple hai:
+>
+> ```rust
+> pub trait Iterator {
+>     type Item;
+>     fn next(&mut self) -> Option<Self::Item>;
+>
+>     // 100+ default methods built on top: map, filter, fold, collect, sum, ...
+> }
+> ```
+>
+> Implement `next()`, and free mein milta hai `map`, `filter`, `fold`, `collect`, etc.
+>
+> **Why "zero-cost"** — yeh question interviewers love karte hain.
+>
+> Consider yeh code:
+> ```rust
+> let sum: u64 = (0..1_000_000)
+>     .filter(|x| x % 2 == 0)
+>     .map(|x| x * x)
+>     .sum();
+> ```
+>
+> Naive expectation: 3 separate loops, 3 allocations for intermediate Vecs. **Actually**: single loop, no allocations. Why?
+>
+> 1. **Iterators are lazy** — `filter` aur `map` koi work nahi karte until something pulls items. They just wrap the inner iterator.
+> 2. **`sum()` calls `next()` repeatedly** on the final iterator chain.
+> 3. **Each `next()` call** drills down through the chain: source → filter → map → sum. Compiler inlines all of it.
+> 4. **LLVM optimizes** the inlined code to a single tight loop — same machine code as a manual `for` loop.
+>
+> **Benchmark proof**: yeh functional pipeline manual for-loop ke saath identical assembly produce karta hai (verified by compiler explorer).
+>
+> **Iterator adapters** jo aapko pata hone chahiye:
+>
+> - **`map`** — transform each element
+> - **`filter`** — keep elements matching predicate
+> - **`filter_map`** — combine: returns `Option<U>`, keeps `Some`
+> - **`flat_map`** — flatten nested iterators
+> - **`fold`** — reduce to single value with accumulator
+> - **`take`** / **`skip`** — slicing
+> - **`zip`** — pair two iterators
+> - **`enumerate`** — add index
+> - **`collect()`** — terminate into a collection (Vec, HashMap, String, ...)
+> - **`chain`** — concatenate iterators
+> - **`peekable`** — look ahead without consuming
+>
+> **Common pattern jo Persistent interview mein ask kar sakte hain**:
+>
+> ```rust
+> // Count words by frequency
+> let counts: HashMap<String, u64> = text
+>     .split_whitespace()
+>     .map(|w| w.to_lowercase())
+>     .fold(HashMap::new(), |mut acc, w| {
+>         *acc.entry(w).or_insert(0) += 1;
+>         acc
+>     });
+> ```
+>
+> **Senior-level insight**: For parallelism, swap `iter()` with `par_iter()` from the **`rayon`** crate — same API, work-stealing parallel execution. Yeh **embarrassingly parallel** problems mein 5-10x speedup deta hai with zero code rewrite.
+
+---
+
+## Q17. "What's Pin and why do Futures need it?"
+
+### Best Answer
+
+> Yeh **advanced** topic hai but senior Rust interviews mein common hai. Main brief but complete explain karta hoon.
+>
+> **The problem Pin solves**: **self-referential types**.
+>
+> Consider what compiler generates for an async function:
+>
+> ```rust
+> async fn read_and_parse() -> Result<Config, Error> {
+>     let buffer = read_file().await;  // <-- buffer is a local
+>     let parsed = parse(&buffer);     // <-- &buffer borrows from buffer
+>     Ok(parsed)
+> }
+> ```
+>
+> Compiler yeh state machine generate karta hai:
+>
+> ```rust
+> enum ReadAndParse {
+>     State0,
+>     State1 { buffer: Vec<u8>, buffer_ref: *const Vec<u8> }, // self-reference!
+>     Done,
+> }
+> ```
+>
+> `buffer_ref` is a pointer **into the same struct**. Agar yeh struct memory mein move ho gaya (e.g., `Vec<Future>` push se reallocation), pointer dangling ho jaayega → undefined behavior.
+>
+> **Pin ka kaam**: guarantee karta hai ki ek value memory mein **kabhi move nahi hoga**, once pinned.
+>
+> ```rust
+> Pin<&mut T>     // Pinned mutable reference
+> Pin<Box<T>>     // Heap-allocated and pinned
+> ```
+>
+> Pin sirf type-system level pe enforcement hai — runtime mein koi cost nahi.
+>
+> **Future trait** isliye Pin use karta hai:
+>
+> ```rust
+> pub trait Future {
+>     type Output;
+>     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+> }
+> ```
+>
+> `self: Pin<&mut Self>` matlab — "I promise I won't move you while you're being polled."
+>
+> **In practice**: 99% of the time aap Pin se directly interact nahi karte — Tokio aur async ecosystem yeh handle karte hain. Aapko sirf samjhna hai **why it exists**: self-referential state machines need stable memory addresses.
+>
+> **`Unpin`** — marker trait jo bolta hai "I'm safe to move even when pinned." Most types are `Unpin` by default. Only self-referential types (auto-generated async state machines, ya manually-written self-referential structs) are `!Unpin`.
+>
+> **When you actually deal with Pin**:
+> 1. Implementing a custom `Future` from scratch (rare).
+> 2. Writing async traits — historically required `Pin<Box<dyn Future>>` workarounds (newer Rust has `async fn in traits` natively).
+> 3. Implementing async streams (`Stream` trait).
+>
+> **Interview-safe answer**: *"Pin guarantees a value won't move in memory, which is required for self-referential types like async state machines. Without Pin, an async function holding references to its own local variables across an `.await` would be unsound. Most code doesn't touch Pin directly; the async runtime handles it."*
+
+---
+
+## Q18. "Async traits — historical pain and current state?"
+
+### Best Answer
+
+> Yeh ek **classic Rust pitfall** hai jo recently solve hua hai — interviewer ke saath discuss karne ke liye good topic hai.
+>
+> **The historical problem**: Rust mein async traits **natively work nahi karte the** until Rust 1.75 (Dec 2023). Yeh code Rust 1.74 mein **error** deta tha:
+>
+> ```rust
+> trait Repository {
+>     async fn find(&self, id: u64) -> Option<User>;  // ERROR pre-1.75
+> }
+> ```
+>
+> **Why**: `async fn` desugars to `fn(...) -> impl Future<Output = ...>`. But `impl Trait` in trait return position wasn't allowed (it would need to express the future's concrete type, which depends on the implementor).
+>
+> **The workaround**: **`async-trait` crate** — community macro that rewrites async trait methods to return `Pin<Box<dyn Future + Send>>`:
+>
+> ```rust
+> use async_trait::async_trait;
+>
+> #[async_trait]
+> trait Repository {
+>     async fn find(&self, id: u64) -> Option<User>;
+> }
+> ```
+>
+> Cost: every async method call allocates a Box for the future. Mostly negligible, but in hot paths measurable.
+>
+> **Current state (Rust 1.75+)**: **async fn in traits is stable**. Above code works natively without `async-trait`, no boxing:
+>
+> ```rust
+> trait Repository {
+>     async fn find(&self, id: u64) -> Option<User>;  // Works in 1.75+
+> }
+> ```
+>
+> **The remaining catch**: Native async traits don't yet support **trait objects** (`dyn Repository`). For that you still need `async-trait` or manually box the future.
+>
+> **My current pattern**:
+> - **Static dispatch with generics** — use native async traits (1.75+).
+> - **Dynamic dispatch needed** — use `async-trait` for trait objects, OR define methods returning `Pin<Box<dyn Future>>` explicitly.
+>
+> **Why mention this in interview**: it shows aap follow karte ho Rust language evolution, and you understand both old patterns (because production codebases still use them) and new patterns.
+
+---
+
+## Q19. "How do you handle blocking code inside async runtime?"
+
+### Best Answer
+
+> Critical question. **Most async bugs in production** isi se aate hain.
+>
+> **The fundamental rule**: Tokio worker thread ek time mein ek future poll karta hai. Agar ek future **blocking syscall** karta hai (file I/O without async, CPU-heavy work, `std::thread::sleep`), worker thread stuck ho jaata hai aur **other futures starve** karte hain.
+>
+> Symptom: latency spikes, throughput cliffs, p99 explosion.
+>
+> **Solution 1: `tokio::task::spawn_blocking`**
+>
+> CPU-heavy ya blocking work for this. Tokio ka **separate blocking thread pool** par run hota hai (default 512 threads).
+>
+> ```rust
+> let result = tokio::task::spawn_blocking(|| {
+>     // CPU-heavy work, blocking I/O — safe here
+>     expensive_computation()
+> }).await?;
+> ```
+>
+> Use cases:
+> - CPU-intensive computation (cryptography, image processing, parsing).
+> - Calling a sync library that doesn't have an async equivalent.
+> - Legacy sync code wrapped for async callers.
+>
+> **Solution 2: `tokio::task::block_in_place`** — when you need to block on the **current thread** (rare):
+>
+> ```rust
+> let result = tokio::task::block_in_place(|| {
+>     blocking_operation()
+> });
+> ```
+>
+> This works only on multi-threaded runtime. The current worker thread leaves the runtime, other tasks get moved off it.
+>
+> **Solution 3: Use async-native libraries**
+>
+> Best option. Instead of `std::fs::read_to_string`, use `tokio::fs::read_to_string`. Instead of `reqwest::blocking`, use `reqwest` async client.
+>
+> **Anti-pattern to avoid**:
+>
+> ```rust
+> async fn bad() {
+>     std::thread::sleep(Duration::from_secs(1));  // BLOCKS WORKER
+> }
+> ```
+>
+> Use `tokio::time::sleep` instead — async-aware, doesn't block.
+>
+> **How to detect blocking in production**:
+> 1. **`tokio-console`** — shows tasks that have been polling for too long without yielding. Smoking-gun signal.
+> 2. **Latency p99 spikes** that don't correlate with downstream slowness.
+> 3. **Worker thread utilization** stays low while latency is high — workers blocked, not busy.
+>
+> **Real example**: In the matching engine, hum initial version mein order persistence ke liye `std::fs::write` use kar rahe the. Throughput cliff at 100K/sec. Switched to `tokio::fs::write` + batched writes — throughput jumped to 700K+.
+
+---
+
+## Q20. "Memory layout — stack vs heap, what's on each, what does `Box` actually do?"
+
+### Best Answer
+
+> Senior Rust mein memory layout understand karna critical hai for performance reasoning.
+>
+> **Stack** — fast, LIFO (last-in first-out) memory associated with function calls. Each function call gets a **stack frame** with its local variables.
+>
+> Properties:
+> - **Fast allocation/deallocation** — just move stack pointer.
+> - **Limited size** — typically 8MB per thread (configurable).
+> - **Size must be known at compile time** — fixed-size types only.
+> - **Automatic cleanup** — frame popped when function returns.
+>
+> Examples on stack: `i32`, `f64`, `bool`, `[u8; 64]` (fixed-size array), small structs.
+>
+> **Heap** — large, flexible memory for things that can grow or live beyond function calls.
+>
+> Properties:
+> - **Slower allocation** — allocator finds free space.
+> - **Large** — bounded by system memory.
+> - **Dynamic size** — grow/shrink at runtime.
+> - **Manual lifecycle** — but Rust handles this via ownership / Drop.
+>
+> Examples on heap: contents of `Vec`, `String`, `Box<T>`, `Arc<T>`.
+>
+> **The key insight**: A `Vec<u8>` ka **struct itself** (pointer, length, capacity — 24 bytes on 64-bit) **stack par hota hai**, but its data (the actual bytes) **heap par hota hai**.
+>
+> ```text
+> Stack:                      Heap:
+> ┌─────────────────┐         ┌──────────────────┐
+> │ Vec             │         │                  │
+> │ ptr: 0x7f...    │ ──────> │ [1, 2, 3, ...]   │
+> │ len: 5          │         │                  │
+> │ cap: 8          │         └──────────────────┘
+> └─────────────────┘
+> ```
+>
+> **`Box<T>` ka kaam**: heap par allocate karna aur uska pointer return karna. Yeh same overhead hai as a raw pointer (8 bytes on 64-bit) — no extra metadata.
+>
+> ```rust
+> let x: Box<i32> = Box::new(42);
+> // Stack: pointer (8 bytes)
+> // Heap: 42 (4 bytes for i32)
+> ```
+>
+> Why use Box?
+> 1. **Recursive types** — `enum Tree { Leaf, Node(Box<Tree>, Box<Tree>) }`. Without Box, infinite size.
+> 2. **Large values** — moving a `Box<HugeStruct>` is cheap (8 bytes); moving `HugeStruct` copies all bytes.
+> 3. **Trait objects** — `Box<dyn Trait>` needs heap for the value (vtable lives in static memory).
+>
+> **Practical performance implication**:
+>
+> ```rust
+> // Slow — heap allocation per iteration
+> for i in 0..1000 {
+>     let v: Vec<i32> = vec![0; 100];
+>     // ...
+> }
+>
+> // Fast — stack allocation, reused
+> let mut v = vec![0; 100];
+> for i in 0..1000 {
+>     v.clear();
+>     v.extend(0..100);
+>     // ...
+> }
+> ```
+>
+> **Matching engine perf win**: Maine hot path mein allocations measure kiye `dhat-rs` profiler se. Order processing per call 6 allocations kar raha tha. Refactor karke pool-based reuse + `SmallVec` for small queues → down to 0 allocations on hot path. Yeh single change throughput ko 3x kar diya.
+
+---
+
+## Q21. "Explain Tokio in depth — what it is, how it works, when to use it."
+
+### Best Answer
+
+> **Tokio** Rust ka **most popular async runtime** hai — basically yeh wo engine hai jo aapke async code ko actually execute karta hai. Rust language async/await syntax provide karta hai, lekin runtime nahi — Tokio us gap ko fill karta hai.
+>
+> **What Tokio gives you**:
+> 1. **Executor** — futures ko poll karta hai, schedule karta hai threads par.
+> 2. **Reactor (driver)** — OS-level I/O events handle karta hai via `epoll` (Linux), `kqueue` (macOS), `IOCP` (Windows).
+> 3. **Async primitives** — `tokio::fs`, `tokio::net`, `tokio::time`, `tokio::sync` (channels, mutexes, semaphores).
+> 4. **Task spawning** — `tokio::spawn` for concurrent tasks (lightweight, M:N scheduled).
+> 5. **Timers, signals, process management** — full async stdlib equivalent.
+>
+> **How it works internally**:
+>
+> Tokio has two main schedulers:
+>
+> 1. **Multi-threaded (default)** — N worker threads (typically equal to CPU cores). Each worker has its own task queue, plus a global queue. **Work-stealing** algorithm: jab koi worker ka queue empty hota hai, woh doosre workers ke queues se kaam steal karta hai. Yeh load balancing automatically deta hai.
+>
+> 2. **Current-thread (single-threaded)** — sab kaam ek thread par. Use case: embedded, WASM, tests, ya jab `!Send` futures use karne ho.
+>
+> Configuration example:
+> ```rust
+> // Default — multi-threaded, num_cpus workers
+> #[tokio::main]
+> async fn main() { ... }
+>
+> // Explicit configuration
+> #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
+> async fn main() { ... }
+>
+> // Single-threaded
+> #[tokio::main(flavor = "current_thread")]
+> async fn main() { ... }
+>
+> // Manual runtime building
+> let rt = tokio::runtime::Builder::new_multi_thread()
+>     .worker_threads(16)
+>     .thread_name("my-worker")
+>     .enable_all()
+>     .build()?;
+> rt.block_on(async { ... });
+> ```
+>
+> **The execution model — critical to understand**:
+>
+> ```text
+> ┌─────────────────────────────────────────┐
+> │  Worker Thread 1   Worker Thread 2  ... │
+> │     ┌────┐            ┌────┐            │
+> │     │Task│            │Task│            │
+> │     │ A  │            │ C  │            │
+> │     └────┘            └────┘            │
+> │     ┌────┐            ┌────┐            │
+> │     │Task│            │Task│            │
+> │     │ B  │            │ D  │            │
+> │     └────┘            └────┘            │
+> │       ↓                  ↓              │
+> │  Local queue        Local queue         │
+> │       └────┬───────┬─────┘              │
+> │            │       │                    │
+> │       Global queue (overflow)           │
+> └─────────────────────────────────────────┘
+>          ↓
+> ┌────────────────────┐
+> │ Reactor (epoll)    │
+> │ I/O readiness ──┐  │
+> └─────────────────┴──┘
+> ```
+>
+> Each worker:
+> 1. Polls a task from its queue.
+> 2. Task runs until it hits `.await` on something not ready.
+> 3. Task suspends, **its Waker** registered with reactor.
+> 4. Worker picks next task.
+> 5. When I/O ready, reactor wakes task, puts back in queue.
+>
+> **Single Tokio worker can handle thousands of concurrent tasks** — because most tasks are I/O-bound and yield frequently.
+>
+> **`tokio::spawn`** — lightweight task spawning. Cost: ~1KB memory + minimal scheduling overhead. Compare to OS threads: 8MB stack + expensive context switches.
+>
+> ```rust
+> let handle = tokio::spawn(async move {
+>     fetch_url("https://...").await
+> });
+> let result = handle.await?;  // Returns JoinHandle, await for result
+> ```
+>
+> **Key Tokio components aapko use karte aana chahiye**:
+>
+> 1. **`tokio::sync::mpsc`** — multi-producer single-consumer channel. Standard for producer-consumer patterns.
+> 2. **`tokio::sync::oneshot`** — one-shot channel, single value. Used for request-reply patterns.
+> 3. **`tokio::sync::broadcast`** — fan-out, every receiver gets every message.
+> 4. **`tokio::sync::watch`** — single latest value, multiple readers. Good for config updates.
+> 5. **`tokio::sync::Mutex`** — async-aware mutex. **Caution**: prefer `std::sync::Mutex` for short critical sections inside async — std Mutex is faster, and short locks don't hurt.
+> 6. **`tokio::sync::Semaphore`** — bounded concurrency control.
+> 7. **`tokio::time::sleep` / `timeout` / `interval`** — async time primitives.
+> 8. **`tokio::select!`** — race multiple futures, take whichever finishes first.
+> 9. **`tokio::task::JoinSet`** — manage dynamic set of spawned tasks.
+> 10. **`tokio::task::spawn_blocking`** — offload blocking/CPU work to blocking thread pool (default 512 threads).
+>
+> **`tokio::select!` example** — racing for first result, useful for timeouts and shutdown:
+>
+> ```rust
+> tokio::select! {
+>     result = process_order() => {
+>         handle_result(result);
+>     }
+>     _ = tokio::time::sleep(Duration::from_secs(5)) => {
+>         tracing::warn!("order processing timed out");
+>     }
+>     _ = shutdown_signal.cancelled() => {
+>         tracing::info!("shutdown requested");
+>         return;
+>     }
+> }
+> ```
+>
+> **When to use Tokio**:
+>
+> ✅ **I/O-bound workloads** — network servers, HTTP clients, database access, file I/O.
+> ✅ **Many concurrent operations** — 10K+ simultaneous connections, scraping, fan-out requests.
+> ✅ **Event-driven systems** — Kafka consumers, WebSocket servers, real-time messaging.
+> ✅ **Microservices** — REST APIs (Axum), gRPC (Tonic) built on Tokio.
+>
+> ❌ **CPU-bound parallel work** — use Rayon (next question).
+> ❌ **Embarrassingly parallel computation** — same answer.
+> ❌ **Single-threaded sync workloads** — Tokio adds complexity for no benefit.
+>
+> **Real example from matching engine**:
+>
+> Maine Tokio use kiya tha kyunki:
+> 1. **WebSocket order ingestion** — thousands of concurrent connections from clients streaming orders. Tokio's async I/O handles this elegantly.
+> 2. **Multi-stage pipeline** — separate tasks for ingestion, matching, persistence, downstream notification. `mpsc` channels connect them.
+> 3. **Backpressure** — bounded channels automatically suspend producers when consumers slow down.
+> 4. **Timers** — order TTLs (cancel after N seconds), heartbeat monitoring — all handled by `tokio::time`.
+>
+> **Common Tokio pitfalls** (mention in interview for senior signal):
+>
+> 1. **Blocking the worker thread** — calling sync I/O or CPU-heavy work inside async. Solution: `spawn_blocking`.
+> 2. **Holding `std::Mutex` across `.await`** — can deadlock or starve other tasks. Use `tokio::sync::Mutex` if you must, or restructure to release lock before await.
+> 3. **Unbounded channels** — easy to write, can blow up memory under load. Always use bounded `mpsc::channel(N)`.
+> 4. **Cancellation safety** — when you `.await` something inside `tokio::select!`, that future may be dropped mid-execution. Make sure that's safe (don't leave state half-modified).
+> 5. **`tokio::spawn` lifetime** — spawned task is `'static`. You can't borrow stack variables; clone owned data into the task.
+>
+> **Performance characteristics**:
+> - Task spawn: ~200ns
+> - Channel send/recv: ~100-500ns
+> - Async I/O: same as raw epoll (Tokio adds minimal overhead)
+> - Suitable for **millions of tasks** in flight; **hundreds of thousands** of network connections per process.
+
+---
+
+## Q22. "Explain Rayon in depth — what it is, how it works, when to use it."
+
+### Best Answer
+
+> **Rayon** Rust ka **data parallelism library** hai. Tokio se completely different — Tokio async I/O ke liye hai, Rayon **CPU-bound parallel computation** ke liye hai.
+>
+> **Core idea**: Rayon takes a normal iterator and makes it parallel by changing **just one line of code** — `iter()` → `par_iter()`. Behind the scenes, it splits work across all CPU cores using **work-stealing**.
+>
+> **How it works internally**:
+>
+> Rayon ek **global thread pool** maintain karta hai (default size = num_cpus). Pool ke har thread ka **own deque** (double-ended queue) of work hota hai.
+>
+> Algorithm:
+> 1. **Work splitting** — input ko recursively chhote chunks mein divide karta hai.
+> 2. **Work-stealing** — har thread apne deque se kaam leta hai. Empty hone par doosre threads se steal karta hai (from the opposite end of their deque to minimize contention).
+> 3. **Dynamic load balancing** — agar koi chunk slow hai, doosre threads spare capacity use karke usse offload kar lete hain.
+>
+> Yeh approach **Cilk** language se inspire hai, which proved theoretically optimal for fork-join parallelism.
+>
+> **Basic usage — parallel iterators**:
+>
+> ```rust
+> use rayon::prelude::*;
+>
+> // Serial — single thread
+> let sum: u64 = (0..1_000_000).map(|x| expensive(x)).sum();
+>
+> // Parallel — all CPU cores
+> let sum: u64 = (0..1_000_000).into_par_iter().map(|x| expensive(x)).sum();
+> ```
+>
+> **Yeh literally one keyword change hai** — `into_par_iter()` instead of `into_iter()`. API surface identical hai. Yahi Rayon ki beauty hai.
+>
+> **More examples**:
+>
+> ```rust
+> // Parallel filter + map + collect
+> let results: Vec<_> = items
+>     .par_iter()
+>     .filter(|x| is_valid(x))
+>     .map(|x| transform(x))
+>     .collect();
+>
+> // Parallel reduce
+> let total: u64 = numbers.par_iter().sum();
+>
+> // Parallel mutation
+> let mut data = vec![0u64; 1_000_000];
+> data.par_iter_mut().for_each(|x| *x = expensive_computation(*x));
+>
+> // Parallel sort
+> let mut numbers = vec![5, 3, 8, 1, 4];
+> numbers.par_sort();
+> ```
+>
+> **`rayon::join`** — fork-join primitive:
+>
+> ```rust
+> let (left, right) = rayon::join(
+>     || expensive_a(),
+>     || expensive_b(),
+> );
+> ```
+>
+> Yeh `a` aur `b` ko parallel run kar sakta hai if there's spare capacity. Recursive divide-and-conquer ka building block hai.
+>
+> **`rayon::scope`** — spawn many tasks with shared lifetime:
+>
+> ```rust
+> rayon::scope(|s| {
+>     for chunk in data.chunks_mut(1000) {
+>         s.spawn(move |_| process_chunk(chunk));
+>     }
+> });
+> // All tasks complete by here
+> ```
+>
+> Unlike `tokio::spawn`, **rayon scope tasks can borrow from the stack** — kyunki scope guarantees all spawned tasks complete before scope returns.
+>
+> **When to use Rayon**:
+>
+> ✅ **CPU-bound work** — image processing, parsing, cryptography, ML inference batches.
+> ✅ **Embarrassingly parallel** — operations on independent items (map over collection).
+> ✅ **Batch processing** — process 1M records, parallel apply transformation.
+> ✅ **Aggregations** — sum, product, max over large datasets.
+> ✅ **Parallel sort, search, dedup** — collection operations.
+> ✅ **Matrix / numerical computation**.
+>
+> ❌ **I/O-bound work** — use Tokio. Rayon threads will all block on I/O.
+> ❌ **Async code** — Rayon is sync, not async-aware.
+> ❌ **Few items with cheap work** — overhead exceeds benefit. Rule of thumb: par_iter needs ~10μs+ of work per item to be worth it.
+> ❌ **Shared mutable state** — Rayon doesn't help; you need locks which serialize work.
+>
+> **Real example from blockchain work**:
+>
+> Hydragon mein hum signature verification batches mein karte the. **Serial version**: 1000 signatures verify karne mein 800ms lagte the. With `par_iter()` on a 16-core machine, **same work in 60ms** — almost 13x speedup. Single line of code change.
+>
+> ```rust
+> // Before: serial
+> let valid: Vec<bool> = signatures.iter()
+>     .map(|sig| verify_bls(sig, message))
+>     .collect();
+>
+> // After: parallel
+> let valid: Vec<bool> = signatures.par_iter()
+>     .map(|sig| verify_bls(sig, message))
+>     .collect();
+> ```
+>
+> **For Persistent / wealth management context**: Rayon ideal hai for:
+> - Portfolio NAV calculation across thousands of portfolios — each portfolio independent.
+> - Reconciliation engine — process millions of trades, hash-join in parallel chunks.
+> - Risk simulation — Monte Carlo runs, each independent path.
+> - Batch report generation.
+>
+> **Common Rayon pitfalls**:
+>
+> 1. **Tiny work per item** — `par_iter().map(|x| x + 1).sum()` is **slower** than serial. Thread overhead dominates. Use `.chunks(N).par_iter()` for batching.
+> 2. **Shared mutex inside parallel section** — defeats the purpose. All threads queue on the lock. Restructure to avoid shared state, or use thread-local accumulators with final reduction.
+> 3. **Mixing with Tokio** — never call `.par_iter()` directly inside async code. It blocks the Tokio worker. Wrap in `spawn_blocking`:
+>    ```rust
+>    let result = tokio::task::spawn_blocking(move || {
+>        data.par_iter().map(expensive).sum::<u64>()
+>    }).await?;
+>    ```
+> 4. **Non-deterministic ordering** — `par_iter().collect()` preserves order, but if you do `for_each` with side effects, execution order is arbitrary. Use `par_iter().with_min_len(N)` to control chunking.
+> 5. **Custom thread pool** — by default Rayon uses one global pool. For isolation, build your own:
+>    ```rust
+>    let pool = rayon::ThreadPoolBuilder::new()
+>        .num_threads(8)
+>        .build()?;
+>    pool.install(|| {
+>        data.par_iter().map(...).collect()
+>    });
+>    ```
+
+---
+
+## Q23. "Tokio vs Rayon — when to use which? Can you use both?"
+
+### Best Answer
+
+> Yeh **most important conceptual question** hai for backend Rust engineers. Donon ka role complementary hai, conflicting nahi.
+>
+> **One-line summary**:
+> - **Tokio = async I/O concurrency.** Many tasks, mostly waiting for I/O.
+> - **Rayon = CPU parallelism.** Heavy computation, divide across cores.
+>
+> **Side-by-side comparison**:
+>
+> | Aspect | Tokio | Rayon |
+> |---|---|---|
+> | **Workload type** | I/O-bound | CPU-bound |
+> | **Concurrency model** | M:N async tasks | Work-stealing thread pool |
+> | **Task cost** | ~1KB, ~200ns spawn | OS threads, but pool-reused |
+> | **Best at** | 10K+ network connections | Parallel computation on data |
+> | **API style** | `async/await`, `spawn`, channels | Iterator combinators (`par_iter`) |
+> | **Thread count** | Workers = CPU cores (default) | Workers = CPU cores (default) |
+> | **Blocking is OK?** | NO — use `spawn_blocking` | YES — that's the point |
+> | **Use for HTTP server** | YES | NO |
+> | **Use for image processing batch** | NO | YES |
+>
+> **Decision tree**:
+>
+> ```
+> Need to handle many concurrent operations?
+> ├── I/O-bound (network, DB, files)? → Tokio
+> └── CPU-bound (compute on data)? → Rayon
+>
+> Need both?
+> └── Use Tokio for I/O, offload CPU work via spawn_blocking → Rayon
+> ```
+>
+> **Can you use both? YES, and often you should.**
+>
+> A typical production service:
+> - **Tokio runtime** for HTTP server, DB calls, Kafka consumers — all I/O.
+> - **Rayon** for CPU-heavy work — e.g., batch validation, parallel transformation of received data.
+>
+> **The bridge: `tokio::task::spawn_blocking`**:
+>
+> ```rust
+> #[tokio::main]
+> async fn main() {
+>     // Tokio handles HTTP
+>     let app = Router::new().route("/process", post(process_handler));
+>     // ...
+> }
+>
+> async fn process_handler(Json(payload): Json<Vec<Item>>) -> Result<Json<Output>, AppError> {
+>     // Bridge: offload CPU work to Rayon via blocking pool
+>     let result = tokio::task::spawn_blocking(move || {
+>         payload.par_iter()
+>             .map(|item| expensive_cpu_work(item))
+>             .collect::<Vec<_>>()
+>     }).await?;
+>
+>     // Back to async — write result to DB
+>     save_to_db(&result).await?;
+>     Ok(Json(result.into()))
+> }
+> ```
+>
+> **Why this pattern works**:
+> 1. Tokio worker receives HTTP request — handles it on async runtime.
+> 2. `spawn_blocking` moves CPU work to Tokio's **blocking thread pool** (separate from async workers).
+> 3. Inside the blocking task, **Rayon parallelizes** across CPU cores.
+> 4. Result awaited back into async context — async DB write follows.
+>
+> **Async workers are never blocked** — they stay free to handle other I/O.
+>
+> **Anti-pattern to avoid**:
+>
+> ```rust
+> async fn bad_handler(items: Vec<Item>) -> Result<Vec<Output>> {
+>     // BAD: par_iter blocks the Tokio worker
+>     let result: Vec<_> = items.par_iter()
+>         .map(|x| expensive_cpu(x))
+>         .collect();
+>     Ok(result)
+> }
+> ```
+>
+> Yeh Tokio worker thread ko block kar deta hai. Doosre handlers starve karenge. Solution: wrap in `spawn_blocking`.
+>
+> **Real-world architecture I'd build for Persistent**:
+>
+> Imagine a market-data analytics service:
+> 1. **Kafka consumer (Tokio)** — receives market events.
+> 2. **Batch accumulator (Tokio)** — collect 1000 events per batch.
+> 3. **CPU processing (Rayon via spawn_blocking)** — parallel compute indicators, signals, derived metrics.
+> 4. **Postgres write (Tokio + sqlx)** — async batched insert.
+> 5. **HTTP query API (Axum on Tokio)** — clients query results.
+>
+> **Each layer uses the right tool**. Tokio handles all I/O concurrency. Rayon handles the CPU parallel step within a single request's lifecycle.
+>
+> **Senior-level insight to drop in interview**:
+>
+> *"Tokio aur Rayon donon work-stealing schedulers hain — algorithmic level pe similar. Difference is the unit of work. Tokio's units are async tasks that voluntarily yield at `.await` points; Rayon's units are synchronous closures that run to completion. Conflict tab hota hai jab aap unko mix karte ho without `spawn_blocking` — async worker blocked by CPU work → entire async runtime stalls."*
+>
+> **TL;DR jo aap interview mein bol sakte ho**:
+> *"Tokio I/O concurrency ke liye, Rayon CPU parallelism ke liye. Production mein dono use karta hoon — Tokio runtime around the service, Rayon inside `spawn_blocking` blocks for compute-heavy work. They complement, not compete."*
+
+---
+
+## Q24. "Cargo workspaces, features, and modular code organization?"
+
+### Best Answer
+
+> Production Rust projects modular hote hain — Cargo workspaces aur feature flags isme central role play karte hain.
+>
+> **Workspaces** — multiple related crates ek root mein:
+>
+> ```toml
+> # Cargo.toml (root)
+> [workspace]
+> members = [
+>     "crates/core",
+>     "crates/api",
+>     "crates/persistence",
+>     "crates/cli",
+> ]
+> resolver = "2"
+> ```
+>
+> Benefits:
+> - **Shared `Cargo.lock`** — consistent dependency versions across crates.
+> - **Faster builds** — shared target directory, parallel compilation.
+> - **Clear modular boundaries** — `core` doesn't depend on `cli`, etc.
+> - **Cargo commands** apply across workspace: `cargo build --workspace`, `cargo test --workspace`.
+>
+> **Modular structure** I follow:
+> - `crates/core` — pure domain logic, no I/O, no async runtime. Maximally testable.
+> - `crates/api` — HTTP/gRPC layer.
+> - `crates/persistence` — DB layer, traits + sqlx implementations.
+> - `crates/messaging` — Kafka/RabbitMQ adapters.
+> - `crates/cli` — binary entry point, wires everything together.
+>
+> **Feature flags** — conditional compilation:
+>
+> ```toml
+> [features]
+> default = ["postgres"]
+> postgres = ["dep:sqlx"]
+> sqlite = ["dep:rusqlite"]
+> tracing = ["dep:tracing", "dep:tracing-subscriber"]
+> ```
+>
+> Use case examples:
+> - Multiple database backends — user picks one.
+> - Optional telemetry/tracing.
+> - Test-only utilities — `#[cfg(feature = "test-helpers")]`.
+> - no_std support — `#[cfg(feature = "std")]` for code that uses std.
+>
+> **Build profiles** — `Cargo.toml`:
+>
+> ```toml
+> [profile.release]
+> opt-level = 3
+> lto = "fat"           # Link-time optimization — slower compile, faster runtime
+> codegen-units = 1     # Single codegen unit — better optimization, slower compile
+> strip = true          # Strip symbols — smaller binary
+>
+> [profile.dev]
+> opt-level = 0
+> debug = true
+> ```
+>
+> **For matching engine release builds** maine `lto = "fat"` + `codegen-units = 1` use kiya — compile time ~2 mins se 8 mins ho gaya, but runtime throughput ~15% better hua. For latency-critical service, that's a no-brainer trade.
+
+---
+
 # SECTION 4: System Design
 
-## Q12. "Design a service that ingests 100K events per second from Kafka, validates them, writes to Postgres, and exposes a query API."
+## Q25. "Design a service that ingests 100K events per second from Kafka, validates them, writes to Postgres, and exposes a query API."
 
 ### Best Answer (structured, 10-12 minutes)
 
@@ -404,7 +1438,7 @@ Yeh document ek **realistic mock interview** hai — exactly waise jaise Persist
 
 ---
 
-## Q13. "p99 latency on a Rust + Postgres service just went 10× higher. How do you diagnose?"
+## Q26. "p99 latency on a Rust + Postgres service just went 10× higher. How do you diagnose?"
 
 ### Best Answer
 
@@ -455,7 +1489,7 @@ Yeh document ek **realistic mock interview** hai — exactly waise jaise Persist
 
 # SECTION 5: Behavioral / Leadership
 
-## Q14. "Tell me about a time you mentored or led a junior engineer."
+## Q27. "Tell me about a time you mentored or led a junior engineer."
 
 ### Best Answer
 
@@ -477,7 +1511,7 @@ Yeh document ek **realistic mock interview** hai — exactly waise jaise Persist
 
 ---
 
-## Q15. "Tell me about a time you disagreed with a technical decision."
+## Q28. "Tell me about a time you disagreed with a technical decision."
 
 ### Best Answer
 
@@ -502,7 +1536,7 @@ Yeh document ek **realistic mock interview** hai — exactly waise jaise Persist
 
 ---
 
-## Q16. "Tell me about a project that didn't go as planned."
+## Q29. "Tell me about a project that didn't go as planned."
 
 ### Best Answer
 
@@ -529,7 +1563,7 @@ Yeh document ek **realistic mock interview** hai — exactly waise jaise Persist
 
 # SECTION 6: Persistent-Specific Questions
 
-## Q17. "Do you have Kafka and PostgreSQL production experience?"
+## Q30. "Do you have Kafka and PostgreSQL production experience?"
 
 ### Best Answer (honest framing)
 
@@ -552,7 +1586,7 @@ Yeh document ek **realistic mock interview** hai — exactly waise jaise Persist
 
 ---
 
-## Q18. "What questions do you have for me?"
+## Q31. "What questions do you have for me?"
 
 ### Best Answer (ask 3-4 of these)
 
