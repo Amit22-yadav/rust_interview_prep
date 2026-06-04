@@ -64,6 +64,13 @@ Rust programming language seekhne ke liye ek complete guide jo basic se advanced
 47. `Pin<T>` & Self-Referential Structs
 48. Futures Trait & `.await` Desugaring
 
+### Part 6: Ecosystem & Tooling (पारिस्थितिकी तंत्र)
+49. Tokio (Async Runtime Deep Dive)
+50. Rayon (Data Parallelism)
+51. Channels Deep Dive (`mpsc` vs Tokio vs Crossbeam)
+52. Serde (Serialization & Deserialization)
+53. Testing & Cargo (Tests, Workspaces, Build Tooling)
+
 ---
 
 # Part 1: Basics (शुरुआत)
@@ -3792,6 +3799,506 @@ loop {
 
 ---
 
+# Part 6: Ecosystem & Tooling (पारिस्थितिकी तंत्र)
+
+## 49. Tokio (Async Runtime Deep Dive)
+
+### Formal Definition
+**Tokio** Rust ka sabse popular **asynchronous runtime** hai — ek crate jo `Future`s ko actually **execute** karne ke liye **executor**, **scheduler**, aur **async I/O / timers / synchronization primitives** provide karta hai. Rust ki language sirf `async`/`await` syntax aur `Future` trait deti hai — koi built-in executor nahi. Tokio wo missing piece hai jo tasks ko poll karta hai, OS event notifications (epoll/kqueue/IOCP) ke saath integrate karta hai, aur multi-core machines pe kaam distribute karta hai.
+
+### Deep Explanation - Tokio Andar Se Kaise Kaam Karta Hai?
+
+**1. Multi-threaded work-stealing scheduler**:
+Tokio default mein ek **worker thread pool** banata hai (usually CPU cores jitne). Har worker thread ke paas apna **local run queue** hota hai. Agar ek worker ka queue khali ho jaye, wo doosre worker se kaam **steal** kar leta hai (work-stealing) — taaki koi core idle na rahe aur load balanced rahe.
+
+**2. Reactor (I/O driver)**:
+Tokio ek **reactor** chalata hai jo OS ke event mechanism (Linux pe `epoll`, macOS/BSD pe `kqueue`, Windows pe `IOCP`) ke saath bind hota hai. Jab ek task network/file pe wait karta hai, reactor OS ko bolta hai "is socket pe data aaye to batana". Tab tak task **suspend** rehta hai, thread free rehta hai. Event aate hi reactor task ka **Waker** trigger karta hai → scheduler usse dobara poll karta hai.
+
+**3. Tasks ≠ Threads**:
+`tokio::spawn` ek **task** banata hai — ek green/lightweight unit jo kisi bhi worker thread pe run ho sakta hai. Ek task move ho sakta hai threads ke beech (isi liye spawned future ko `Send` hona padta hai). Lakhon tasks chhote memory footprint mein run ho sakte hain.
+
+### Runtime Flavors
+
+| Flavor | Threads | Use Case |
+|--------|---------|----------|
+| `multi_thread` (default) | Multiple workers | Production servers, parallel I/O |
+| `current_thread` | Single thread | Tests, CLI tools, `!Send` data, low overhead |
+
+```rust
+// Macro se (sabse common)
+#[tokio::main]                       // = multi_thread by default
+async fn main() { /* ... */ }
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() { /* ... */ }
+
+// Manually build (zyada control)
+fn main() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()                // I/O + time drivers enable karo
+        .build()
+        .unwrap();
+    rt.block_on(async { /* async code */ });
+}
+```
+
+### Tokio ke Core Building Blocks
+
+**Spawning aur Joining**:
+```rust
+let handle = tokio::spawn(async {
+    // background task
+    42
+});
+let result = handle.await.unwrap();   // JoinHandle<T> -> Result<T, JoinError>
+```
+
+**Concurrency combinators**:
+- `tokio::join!(a, b)` — saare futures **ek hi task** mein concurrently chalao, sab complete hone par results.
+- `tokio::select!` — jo pehle complete ho us branch pe react karo (race), baaki cancel.
+- `tokio::spawn` — alag task (alag worker pe ja sakta hai, true parallelism).
+
+**Async synchronization (`tokio::sync`)** — `std` waale block karte hain, ye `.await` karte hain:
+- `tokio::sync::Mutex` — async lock (lock guard `.await` se milta hai). **Note**: short critical sections ke liye `std::sync::Mutex` often better hai (faster), bas lock ko `.await` ke across mat hold karo.
+- `mpsc`, `oneshot`, `broadcast`, `watch` — async channels (Section 51 dekho).
+- `Semaphore`, `Notify`, `RwLock`.
+
+### CPU-bound Work — Critical Pitfall
+
+Tokio **I/O-bound** work ke liye optimized hai. Ek async task ke andar **lambi CPU-heavy computation** ya **blocking call** (jaise `std::thread::sleep`, blocking DB driver) worker thread ko block kar degi → baaki tasks stuck.
+
+**Solutions**:
+```rust
+// 1. Blocking / CPU work ke liye dedicated blocking pool
+let result = tokio::task::spawn_blocking(|| {
+    heavy_cpu_computation()           // alag thread pool pe chalega
+}).await.unwrap();
+
+// 2. Async sleep use karo, std::thread::sleep nahi
+tokio::time::sleep(Duration::from_secs(1)).await;
+```
+
+CPU-bound **parallelism** ke liye Tokio nahi — **Rayon** use karo (Section 50).
+
+### Interview Quick Points
+- "Rust mein async hai but runtime nahi" — Tokio wo runtime provide karta hai.
+- Work-stealing multi-thread scheduler → load balanced across cores.
+- `spawn` = task (Send required), `join!` = same-task concurrency, `select!` = race.
+- Blocking call async context mein **mat** karo → `spawn_blocking`.
+- `tokio::sync::Mutex` vs `std::sync::Mutex`: lock ko `.await` ke paar hold karna ho to async waala.
+
+---
+
+## 50. Rayon (Data Parallelism)
+
+### Formal Definition
+**Rayon** ek **data-parallelism** library hai jo sequential iterator code ko **parallel** banane ko trivially easy karti hai — bas `.iter()` ko `.par_iter()` se replace karo. Ye CPU-bound work ko automatically multiple cores pe distribute karti hai, internally ek **work-stealing thread pool** use karke. Rayon ka tagline: *"data parallelism, made easy and guaranteed data-race-free"* — kyunki Rust ka type system (`Send`/`Sync`) compile time pe data races prevent karta hai.
+
+### Deep Explanation - Tokio se Kaise Alag Hai?
+
+Ye **sabse common interview confusion** hai:
+
+| | **Rayon** | **Tokio** |
+|--|-----------|-----------|
+| Kis ke liye? | **CPU-bound** (computation) | **I/O-bound** (network, disk) |
+| Model | Data parallelism | Async concurrency |
+| Unit | Parallel iterators / tasks | Futures / async tasks |
+| `async`/`await`? | Nahi | Haan |
+| Example | Image processing, sorting, math | Web server, DB queries |
+
+**Rule of thumb**: "Kaam karna" (computing) → Rayon. "Wait karna" (I/O) → Tokio.
+
+**Andar kya hota hai?** Rayon ek **global work-stealing thread pool** rakhta hai (usually cores jitne threads). Jab tum `par_iter()` likhte ho, kaam **recursively chhote chunks** mein split hota hai (divide-and-conquer). Idle threads busy threads se kaam steal karte hain — perfect load balancing without manual chunking.
+
+### Parallel Iterators
+```rust
+use rayon::prelude::*;
+
+fn main() {
+    let nums: Vec<i32> = (1..=1_000_000).collect();
+
+    // Sequential
+    let sum: i32 = nums.iter().map(|x| x * x).sum();
+
+    // Parallel — sirf .iter() -> .par_iter()
+    let sum: i32 = nums.par_iter().map(|x| x * x).sum();
+
+    // Filter + map + collect, sab parallel
+    let evens: Vec<i32> = nums.par_iter()
+        .filter(|&&x| x % 2 == 0)
+        .map(|&x| x * 2)
+        .collect();
+}
+```
+
+### `join` aur `scope` (Custom Parallelism)
+```rust
+use rayon::prelude::*;
+
+// Do tasks parallel chalao (fork-join)
+let (a, b) = rayon::join(
+    || expensive_computation_1(),
+    || expensive_computation_2(),
+);
+
+// Classic parallel quicksort — divide and conquer
+fn quicksort<T: Send + Ord>(v: &mut [T]) {
+    if v.len() <= 1 { return; }
+    let mid = partition(v);
+    let (lo, hi) = v.split_at_mut(mid);
+    rayon::join(|| quicksort(lo), || quicksort(hi));  // dono halves parallel
+}
+```
+
+### Important Details
+- **Zero data races at compile time**: Rayon closures ko `Send`/`Sync` bounds chahiye. Agar tum shared mutable state galat tarike se access karoge, **code compile hi nahi hoga**. Safety guaranteed.
+- **Overhead**: Parallelism ka fixed cost hota hai (thread coordination). **Chhote datasets** pe `par_iter()` sequential se **slow** ho sakta hai. Tab use karo jab kaam genuinely heavy ho.
+- **Tokio ke saath**: Async context mein CPU-heavy Rayon kaam karna ho to usse `spawn_blocking` mein ya alag se chalao — warna Tokio worker block hoga.
+- **Reductions**: `sum()`, `reduce()`, `fold()` parallel-safe associative operations honi chahiye (order guarantee nahi).
+
+### Interview Quick Points
+- "Rayon = CPU parallelism, Tokio = I/O concurrency" — distinction clearly batao.
+- `.iter()` → `.par_iter()` = instant parallelism, data-race-free by Rust's type system.
+- `rayon::join` = fork-join primitive; work-stealing pool internally.
+- Small data pe parallelism ka overhead net loss ho sakta hai.
+
+---
+
+## 51. Channels Deep Dive (`mpsc` vs Tokio vs Crossbeam)
+
+### Formal Definition
+**Channel** ek **message-passing** primitive hai jisse threads/tasks data ek doosre ko **bhejte** hain bina shared memory directly access kiye. Philosophy: *"Do not communicate by sharing memory; instead, share memory by communicating."* Ek channel ke do ends hote hain — **Sender (`tx`)** aur **Receiver (`rx`)**. Rust ke ecosystem mein kai channel implementations hain — sahi choose karna interview mein common question hai.
+
+### Channel Types — Bounded vs Unbounded
+
+- **Unbounded**: Sender kabhi block nahi hota; messages queue hote rehte hain (memory unbounded — backpressure nahi).
+- **Bounded**: Capacity fix; queue full hone par sender **block/await** karta hai → **backpressure** (producer ko slow karta hai jab consumer pichhe reh jaye).
+
+### Sender/Receiver Cardinality
+- **mpsc** = Multiple Producer, Single Consumer (kai `tx`, ek `rx`).
+- **mpmc** = Multiple Producer, Multiple Consumer (Crossbeam, `flume`).
+- **oneshot** = ek hi value, ek baar (request-response).
+- **broadcast** = har receiver ko har message ki copy (fan-out).
+
+### `std::sync::mpsc` (Standard Library — Threads ke liye)
+```rust
+use std::sync::mpsc;
+use std::thread;
+
+let (tx, rx) = mpsc::channel();           // unbounded
+// let (tx, rx) = mpsc::sync_channel(10); // bounded (capacity 10)
+
+for i in 0..3 {
+    let tx = tx.clone();                  // multiple producers
+    thread::spawn(move || tx.send(i).unwrap());
+}
+drop(tx);                                 // original tx drop -> rx khatam hona jaane
+
+for received in rx {                      // sender drop hone tak iterate
+    println!("Mila: {}", received);
+}
+```
+- **Sirf threads** ke liye — blocking `recv()`. Async context mein **mat** use karo.
+
+### Tokio Channels (Async ke liye)
+```rust
+use tokio::sync::mpsc;
+
+#[tokio::main]
+async fn main() {
+    let (tx, mut rx) = mpsc::channel(32);     // bounded, async
+    tokio::spawn(async move {
+        tx.send("hello").await.unwrap();      // queue full ho to .await (backpressure)
+    });
+    while let Some(msg) = rx.recv().await {   // async recv
+        println!("{}", msg);
+    }
+}
+```
+Tokio variants:
+- `mpsc::channel(n)` — bounded async mpsc (backpressure).
+- `mpsc::unbounded_channel()` — unbounded (send sync, no await).
+- `oneshot::channel()` — single value, request→response pattern.
+- `broadcast::channel(n)` — har subscriber ko har message.
+- `watch::channel(init)` — sirf latest value (config/state updates).
+
+### Crossbeam Channels (Fast MPMC for Threads)
+```rust
+use crossbeam_channel::{bounded, unbounded, select};
+
+let (tx, rx) = unbounded();                // MPMC — multiple consumers bhi!
+let rx2 = rx.clone();                      // std mpsc mein ye possible nahi
+
+// select! — multiple channels pe wait
+select! {
+    recv(rx) -> msg => println!("ch1: {:?}", msg),
+    recv(rx2) -> msg => println!("ch2: {:?}", msg),
+}
+```
+- `std::mpsc` se **faster** aur **MPMC** support karta hai (receiver clone ho sakta hai).
+- `select!` macro multiple channels pe simultaneously wait karne deta hai.
+
+### Comparison Table
+
+| Channel | Context | Producers | Consumers | Backpressure |
+|---------|---------|-----------|-----------|--------------|
+| `std::sync::mpsc` | Threads (blocking) | Multiple | Single | `sync_channel` se |
+| `tokio::sync::mpsc` | Async (`.await`) | Multiple | Single | bounded se |
+| `tokio::sync::broadcast` | Async | Multiple | Multiple (copies) | bounded |
+| `crossbeam_channel` | Threads (fast) | Multiple | Multiple | bounded se |
+| `flume` | Both (sync + async) | Multiple | Multiple | bounded se |
+
+### Interview Quick Points
+- "Threads ke liye `std::mpsc`/`crossbeam`, async ke liye `tokio::sync`" — context match karo.
+- mpsc = single consumer; multiple consumers chahiye to crossbeam/flume.
+- Bounded channel = **backpressure** = production-safe (unbounded memory blowup se bachata hai).
+- `oneshot` = request/response, `broadcast` = fan-out, `watch` = latest-value.
+- Async context mein blocking `std::mpsc::recv()` **mat** karo — executor block hoga.
+
+---
+
+## 52. Serde (Serialization & Deserialization)
+
+### Formal Definition
+**Serde** (**Ser**ialize/**De**serialize) Rust ka de-facto framework hai data structures ko **serialize** (Rust struct → bytes/text jaise JSON) aur **deserialize** (bytes/text → Rust struct) karne ke liye. Serde **format-agnostic** hai — ek hi `Serialize`/`Deserialize` impl JSON, YAML, TOML, MessagePack, bincode sab ke saath kaam karta hai. Core insight: data model aur format ko **decouple** karta hai.
+
+### Deep Explanation - Architecture
+
+Serde ke teen parts hain:
+1. **Data model**: Ek universal intermediate representation (29 types — bool, i32, string, seq, map, struct, etc.).
+2. **`Serialize`/`Deserialize` traits**: Tumhara type apne aap ko Serde data model mein map karta hai. **`derive` macro** ye automatically generate karta hai.
+3. **Format crates**: `serde_json`, `serde_yaml`, `toml`, `bincode` — data model ko actual bytes mein convert karte hain.
+
+Iska matlab: tum `#[derive(Serialize, Deserialize)]` ek baar likho, phir **kisi bhi** format mein convert kar sakte ho — **zero-cost** (compile-time code generation, runtime reflection nahi jaise Java/Python).
+
+### Basic Usage
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct User {
+    name: String,
+    age: u32,
+    email: String,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let user = User {
+        name: "Amit".to_string(),
+        age: 30,
+        email: "amit@example.com".to_string(),
+    };
+
+    // Serialize: struct -> JSON string
+    let json = serde_json::to_string(&user)?;
+    println!("{}", json);   // {"name":"Amit","age":30,"email":"amit@example.com"}
+
+    // Deserialize: JSON string -> struct
+    let parsed: User = serde_json::from_str(&json)?;
+    println!("{:?}", parsed);
+    Ok(())
+}
+```
+`Cargo.toml`:
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+```
+
+### Field Attributes (Bahut Useful, Interview-favorite)
+```rust
+#[derive(Serialize, Deserialize)]
+struct Config {
+    #[serde(rename = "userName")]          // JSON key alag naam se
+    user_name: String,
+
+    #[serde(default)]                       // missing ho to Default::default()
+    retries: u32,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nickname: Option<String>,               // None ho to JSON mein hi mat daalo
+
+    #[serde(skip)]                          // serialize/deserialize dono se chhodo
+    internal_cache: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]          // saare fields camelCase mein
+struct ApiResponse {
+    status_code: u16,                       // -> "statusCode"
+    response_body: String,                  // -> "responseBody"
+}
+```
+
+### Enums in JSON (Tagging)
+```rust
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type")]                      // internally tagged
+enum Message {
+    Text { content: String },               // {"type":"Text","content":"hi"}
+    Image { url: String },
+}
+```
+Tagging modes: **externally** (default), **internally** (`tag`), **adjacently** (`tag` + `content`), **untagged** (`#[serde(untagged)]` — structure se infer).
+
+### Important Details
+- **Zero-cost & compile-time**: Derive macro real serialization code generate karta hai — no runtime reflection, isi liye fast.
+- **`serde_json::Value`**: Schema na pata ho to dynamic JSON ke liye `Value` enum use karo (`Value::Object`, `Value::Array`, etc.).
+- **Error handling**: `from_str` `Result` return karta hai — malformed/missing-field data gracefully handle hota hai.
+- **Borrowing**: `#[derive(Deserialize)]` zero-copy deserialization support karta hai (`&str` fields jo input buffer se borrow karein) for performance.
+- **Custom logic**: Complex cases mein `Serialize`/`Deserialize` manually implement kar sakte ho, ya `serialize_with`/`deserialize_with` attributes use karo.
+
+### Interview Quick Points
+- Serde = framework; format crates (`serde_json` etc.) = actual encoding. Data model dono ko decouple karta hai.
+- `#[derive(Serialize, Deserialize)]` + `features = ["derive"]` — compile-time, zero runtime reflection.
+- Attributes: `rename`, `rename_all`, `default`, `skip`, `skip_serializing_if`.
+- Unknown schema → `serde_json::Value`.
+- Enum tagging modes interview mein pucha jaata hai (externally/internally/adjacently/untagged).
+
+---
+
+## 53. Testing & Cargo (Tests, Workspaces, Build Tooling)
+
+### Formal Definition
+Rust mein **testing first-class** hai — language aur Cargo dono mein built-in. Test functions `#[test]` attribute se mark hote hain aur `cargo test` se run hote hain. **Cargo** Rust ka official **build system + package manager** hai jo dependencies, compilation, testing, aur project structure handle karta hai. Interview mein testing conventions aur Cargo project structure dono common topics hain.
+
+### Three Kinds of Tests
+
+**1. Unit Tests** — same file mein, private functions bhi test kar sakte hain:
+```rust
+fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]                        // sirf `cargo test` ke time compile ho
+mod tests {
+    use super::*;                   // parent module ke items import
+
+    #[test]
+    fn test_add() {
+        assert_eq!(add(2, 3), 5);
+        assert_ne!(add(2, 2), 5);
+        assert!(add(1, 1) > 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "divide by zero")]
+    fn test_panic() {
+        divide(1, 0);
+    }
+
+    #[test]
+    fn test_with_result() -> Result<(), String> {
+        if add(2, 2) == 4 { Ok(()) } else { Err("math toota".into()) }
+    }
+
+    #[test]
+    #[ignore]                       // `cargo test -- --ignored` se hi chalega
+    fn expensive_test() { /* ... */ }
+}
+```
+
+**2. Integration Tests** — `tests/` directory mein, sirf **public API** test karte hain (alag crate ki tarah compile hote hain):
+```
+my_project/
+├── src/lib.rs
+└── tests/
+    └── integration_test.rs       // har file alag test binary
+```
+```rust
+// tests/integration_test.rs
+use my_project::add;              // crate ko bahar se use karo
+
+#[test]
+fn test_public_api() {
+    assert_eq!(add(2, 2), 4);
+}
+```
+
+**3. Doc Tests** — documentation comments ke andar ke code examples bhi tests hain:
+```rust
+/// Do numbers add karta hai.
+///
+/// ```
+/// use my_project::add;
+/// assert_eq!(add(2, 3), 5);
+/// ```
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+```
+`cargo test` doc examples ko bhi run karta hai — documentation hamesha sahi rehti hai!
+
+### Running Tests
+```bash
+cargo test                      # saare tests (unit + integration + doc)
+cargo test test_add             # naam match karne waale tests
+cargo test -- --nocapture       # println! output dikhao (default suppress)
+cargo test -- --test-threads=1  # serial chalao (parallel default)
+cargo test -- --ignored         # sirf #[ignore] waale
+```
+
+### Cargo Project Structure
+```
+my_project/
+├── Cargo.toml          # manifest: metadata + dependencies
+├── Cargo.lock          # exact dependency versions (lib mein commit mat karo, bin mein karo)
+├── src/
+│   ├── main.rs         # binary crate entry
+│   └── lib.rs          # library crate entry
+├── tests/              # integration tests
+├── benches/            # benchmarks (cargo bench)
+├── examples/           # example programs (cargo run --example x)
+└── build.rs            # build script (compile se pehle chalta hai)
+```
+
+### Cargo Workspaces (Multi-crate Projects)
+Bade projects ko multiple related crates mein todo, ek shared `Cargo.lock` aur `target/` ke saath:
+```toml
+# Root Cargo.toml
+[workspace]
+members = ["app", "core", "utils"]
+resolver = "2"
+```
+```
+my_workspace/
+├── Cargo.toml          # workspace root
+├── app/Cargo.toml
+├── core/Cargo.toml
+└── utils/Cargo.toml
+```
+- `cargo build` — saare members build.
+- `cargo test -p core` — sirf `core` crate test.
+- Crates aapas mein path dependency se link: `core = { path = "../core" }`.
+
+### `build.rs` (Build Scripts)
+Compile se **pehle** chalne waala Rust code — code generation, C libraries link, env detect karne ke liye:
+```rust
+// build.rs (project root mein)
+fn main() {
+    println!("cargo:rerun-if-changed=src/schema.proto");
+    // protobuf compile karo, bindings generate karo, etc.
+}
+```
+
+### Useful Cargo Commands
+```bash
+cargo build --release    # optimized build (slow compile, fast binary)
+cargo clippy             # linter — idiomatic Rust suggestions
+cargo fmt                # rustfmt — code format
+cargo doc --open         # documentation generate + browser mein kholo
+cargo bench              # benchmarks run karo
+cargo add serde          # dependency add karo (Cargo.toml edit ho jaata hai)
+```
+
+### Interview Quick Points
+- 3 test types: **unit** (`#[cfg(test)] mod tests`, private bhi), **integration** (`tests/`, public API), **doc tests** (`///` examples).
+- `#[cfg(test)]` ensure karta hai test code release binary mein **na** jaye.
+- Tests **parallel** chalte hain by default → `--test-threads=1` se serial.
+- `should_panic`, `#[ignore]`, `Result`-returning tests — common patterns.
+- **Workspace** = multiple crates, shared `Cargo.lock`/`target`; `-p <crate>` se target.
+- `build.rs` = pre-compile codegen/linking; `clippy`/`fmt` = quality tooling.
+
+---
+
 ## Final Summary - Sab Topics Cover Hue
 
 Ye complete guide ab **Rust Book ke saare important interview topics** cover karti hai:
@@ -3822,5 +4329,12 @@ Ye complete guide ab **Rust Book ke saare important interview topics** cover kar
 - Procedural macros
 - Atomics + memory ordering
 - Pin + Futures desugaring
+
+### Ecosystem & Tooling (Part 6)
+- Tokio async runtime (scheduler, reactor, spawn/join/select, spawn_blocking)
+- Rayon data parallelism (par_iter, join) + Tokio vs Rayon distinction
+- Channels deep dive (std mpsc vs Tokio vs Crossbeam, bounded/backpressure)
+- Serde serialization (derive, attributes, enum tagging, formats)
+- Testing & Cargo (unit/integration/doc tests, workspaces, build.rs, tooling)
 
 Interview confidence: 100%. All the best bhai!
