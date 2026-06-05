@@ -23,6 +23,7 @@ A comprehensive repository for Rust interview preparation containing learning gu
 | [rust_interview_questions_hindi.md](rust_interview_questions_hindi.md) | 48 frequently asked Rust interview questions (Hindi) |
 | [rust_advanced_interview_questions.md](rust_advanced_interview_questions.md) | Advanced Rust interview questions for senior positions (English) |
 | [rust_advanced_interview_questions_hindi.md](rust_advanced_interview_questions_hindi.md) | Advanced Rust interview questions for senior positions (Hindi) |
+| [real_interview_questions.md](real_interview_questions.md) | Questions actually asked in real interviews, tracked by date with detailed answers |
 
 ### Algorithms & Programs
 
