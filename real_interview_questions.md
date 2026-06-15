@@ -184,7 +184,8 @@ fn main() {
     describe_all(&zoo);                 // Dog says Woof / A cat ignores you elegantly
 }
 ```
-``` // 1. Define the trait (the blueprint)
+```rust
+// 1. Define the trait (the blueprint)
 trait Speaker {
     fn speak(&self) -> String;
 }
