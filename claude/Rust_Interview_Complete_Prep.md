@@ -170,7 +170,8 @@ fn main() {
     // Call the trait method and print the results
     println!("The dog says: {}", my_dog.speak());
     println!("The robot says: {}", my_robot.speak());
-} ```
+} 
+```
 
 ```rust
 trait Greet {
