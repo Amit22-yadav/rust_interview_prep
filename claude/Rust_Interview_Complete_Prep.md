@@ -140,6 +140,39 @@ Traits are Rust's way of defining **shared behavior**. A trait says — any type
 ### Defining and Implementing a Trait
 
 ```rust
+// 1. Define the trait (the blueprint)
+trait Speaker {
+    fn speak(&self) -> String;
+}
+
+struct Dog;
+struct Robot;
+
+// 2. Implement the trait for the Dog struct
+impl Speaker for Dog {
+    fn speak(&self) -> String {
+        String::from("Woof!")
+    }
+}
+
+// 3. Implement the same trait for the Robot struct
+impl Speaker for Robot {
+    fn speak(&self) -> String {
+        String::from("Beep boop!")
+    }
+}
+
+fn main() {
+    // Instantiate the structs
+    let my_dog = Dog;
+    let my_robot = Robot;
+
+    // Call the trait method and print the results
+    println!("The dog says: {}", my_dog.speak());
+    println!("The robot says: {}", my_robot.speak());
+} ```
+
+```rust
 trait Greet {
     fn hello(&self) -> String;
 }
